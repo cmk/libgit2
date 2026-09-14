@@ -2,6 +2,7 @@
 #include "git2/repository.h"
 #include "git2/merge.h"
 #include "merge.h"
+#include "merge_helpers.h"
 
 #define TEST_REPO_PATH "merge-resolve"
 #define BRANCH_ID "7cb63eed597130ba4abb87b3e544b85021905520"
@@ -162,6 +163,22 @@ void test_merge_driver__custom(void)
 
 	cl_assert_equal_file(expected, strlen(expected),
 		TEST_REPO_PATH "/applied.txt");
+}
+
+void test_merge_driver__skip_attributes_bypasses_registered_driver(void)
+{
+	git_index *index;
+	git_merge_options opts = GIT_MERGE_OPTIONS_INIT;
+
+	set_gitattributes_to("custom");
+	opts.flags |= GIT_MERGE_SKIP_ATTRIBUTES;
+	test_driver_custom.initialized = 0;
+	cl_git_pass(merge_commits_from_branches(&index, repo,
+		"master", "branch", &opts));
+	cl_assert_equal_i(0, test_driver_custom.initialized);
+	cl_assert(git_index_get_bypath(index, "applied.txt", 0) == NULL);
+	cl_assert(git_index_get_bypath(index, "automergeable.txt", 0) != NULL);
+	git_index_free(index);
 }
 
 void test_merge_driver__wildcard(void)
@@ -393,4 +410,3 @@ void test_merge_driver__not_configured_driver_falls_back(void)
 
 	test_drivers_register();
 }
-

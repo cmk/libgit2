@@ -105,7 +105,18 @@ typedef enum {
 	 * no conflicts, any conflicting regions will keep conflict
 	 * markers in the merge result.
 	 */
-	GIT_MERGE_VIRTUAL_BASE = (1 << 4)
+	GIT_MERGE_VIRTUAL_BASE = (1 << 4),
+
+	/**
+	 * Use the built-in text merge driver without consulting attributes or
+	 * the merge driver registry. File favor and binary-content detection
+	 * still apply. Attribute files and macros are not loaded by the merge
+	 * computation, including recursive merge-base construction.
+	 *
+	 * This does not suppress attribute use by a subsequent checkout or by
+	 * a caller-provided similarity metric.
+	 */
+	GIT_MERGE_SKIP_ATTRIBUTES = (1 << 5)
 } git_merge_flag_t;
 
 /**

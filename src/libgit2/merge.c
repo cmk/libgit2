@@ -961,10 +961,10 @@ static int merge_conflict_resolve_contents(
 	source.theirs = GIT_MERGE_INDEX_ENTRY_EXISTS(conflict->their_entry) ?
 		&conflict->their_entry : NULL;
 
-	if (file_opts->favor != GIT_MERGE_FILE_FAVOR_NORMAL) {
-		/* if the user requested a particular type of resolution (via the
-		 * favor flag) then let that override the gitattributes and use
-		 * the builtin driver.
+	if ((merge_opts->flags & GIT_MERGE_SKIP_ATTRIBUTES) ||
+		file_opts->favor != GIT_MERGE_FILE_FAVOR_NORMAL) {
+		/* Explicit driver bypass or file favor selects the builtin driver
+		 * without entering attribute discovery, preload or the registry.
 		 */
 		name = "text";
 		builtin.base.apply = git_merge_driver__builtin_apply;
@@ -1897,7 +1897,9 @@ static int merge_normalize_opts(
 	if ((opts->flags & GIT_MERGE_FIND_RENAMES) && !opts->rename_threshold)
 		opts->rename_threshold = GIT_MERGE_DEFAULT_RENAME_THRESHOLD;
 
-	if (given && given->default_driver) {
+	if (opts->flags & GIT_MERGE_SKIP_ATTRIBUTES) {
+		opts->default_driver = NULL;
+	} else if (given && given->default_driver) {
 		opts->default_driver = git__strdup(given->default_driver);
 		GIT_ERROR_CHECK_ALLOC(opts->default_driver);
 	} else {

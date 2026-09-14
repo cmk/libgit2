@@ -1,3 +1,11 @@
+Unreleased
+----------
+
+* Add `GIT_MERGE_SKIP_ATTRIBUTES` to select the built-in merge driver without
+  reading attribute files, loading macros, or consulting registered drivers.
+  The option applies to recursive merge-base construction too; checkout and
+  caller-provided similarity callbacks retain their own behavior.
+
 v1.9.4
 ------
 
