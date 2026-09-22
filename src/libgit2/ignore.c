@@ -19,6 +19,11 @@
 
 #define GIT_IGNORE_DEFAULT_RULES ".\n..\n.git\n"
 
+struct git_ignore_source {
+	git_repository *repo;
+	git_attr_file *file;
+};
+
 /**
  * A negative ignore pattern can negate a positive one without
  * wildcards if it is a basename only and equals the basename of
@@ -289,10 +294,11 @@ static int get_internal_ignores(git_attr_file **out, git_repository *repo)
 	return error;
 }
 
-int git_ignore__for_path(
+static int ignore_for_path(
 	git_repository *repo,
 	const char *path,
-	git_ignores *ignores)
+	git_ignores *ignores,
+	git_attr_file *global)
 {
 	int error = 0;
 	const char *workdir = git_repository_workdir(repo);
@@ -363,7 +369,10 @@ int git_ignore__for_path(
 	attrcache = git_repository_attr_cache(repo);
 	excludes_file = git_attr_cache_excludesfile(attrcache);
 
-	if (excludes_file != NULL)
+	if (global != NULL) {
+		if (!(error = git_vector_insert(&ignores->ign_global, global)))
+			GIT_REFCOUNT_INC(global);
+	} else if (excludes_file != NULL)
 		error = push_ignore_file(
 			ignores, &ignores->ign_global, NULL, excludes_file);
 
@@ -373,6 +382,12 @@ cleanup:
 		git_ignore__free(ignores);
 
 	return error;
+}
+
+int git_ignore__for_path(
+	git_repository *repo, const char *path, git_ignores *ignores)
+{
+	return ignore_for_path(repo, path, ignores, NULL);
 }
 
 int git_ignore__push_dir(git_ignores *ign, const char *dir)
@@ -530,10 +545,11 @@ int git_ignore_clear_internal_rules(git_repository *repo)
 	return error;
 }
 
-int git_ignore_path_is_ignored(
+static int ignore_path_is_ignored(
 	int *ignored,
 	git_repository *repo,
-	const char *pathname)
+	const char *pathname,
+	git_attr_file *global)
 {
 	int error;
 	const char *workdir;
@@ -558,7 +574,7 @@ int git_ignore_path_is_ignored(
 		dir_flag = GIT_DIR_FLAG_FALSE;
 
 	if ((error = git_attr_path__init(&path, pathname, workdir, dir_flag)) < 0 ||
-		(error = git_ignore__for_path(repo, path.path, &ignores)) < 0)
+		(error = ignore_for_path(repo, path.path, &ignores, global)) < 0)
 		goto cleanup;
 
 	while (1) {
@@ -598,6 +614,80 @@ cleanup:
 	git_attr_path__free(&path);
 	git_ignore__free(&ignores);
 	return error;
+}
+
+int git_ignore_path_is_ignored(
+	int *ignored, git_repository *repo, const char *pathname)
+{
+	return ignore_path_is_ignored(ignored, repo, pathname, NULL);
+}
+
+int git_ignore_source_new(
+	git_ignore_source **out,
+	git_repository *repo,
+	const char *source_path,
+	const void *data,
+	size_t len)
+{
+	git_ignore_source *source;
+	git_attr_file_source memory = { GIT_ATTR_FILE_SOURCE_MEMORY };
+	git_str contents = GIT_STR_INIT;
+	git_str_bom_t bom;
+	const char *workdir, *scan;
+	int error, bom_offset;
+
+	GIT_ASSERT_ARG(out);
+	GIT_ASSERT_ARG(repo);
+	GIT_ASSERT_ARG(source_path);
+	GIT_ASSERT_ARG(data || !len);
+	*out = NULL;
+
+	if (len > GIT_ATTR_MAX_FILE_SIZE) {
+		git_error_set(GIT_ERROR_INVALID, "ignore source exceeds size limit");
+		return GIT_EINVALID;
+	}
+	source = git__calloc(1, sizeof(*source));
+	GIT_ERROR_CHECK_ALLOC(source);
+	source->repo = repo;
+	workdir = git_repository_workdir(repo);
+	if (workdir && !git__prefixcmp(source_path, workdir))
+		source_path += strlen(workdir);
+
+	if ((error = git_attr_file__new(&source->file, NULL, &memory)) < 0 ||
+	    (error = git_attr_cache__alloc_file_entry(&source->file->entry,
+		repo, workdir, source_path, &source->file->pool)) < 0 ||
+	    (error = git_str_put(&contents, data, len)) < 0)
+		goto cleanup;
+
+	/* Match the native file loader's BOM and embedded-NUL treatment. */
+	scan = git_str_cstr(&contents);
+	bom_offset = git_str_detect_bom(&bom, &contents);
+	if (bom == GIT_STR_BOM_UTF8)
+		scan += bom_offset;
+	error = parse_ignore_file(repo, source->file, scan, false);
+
+cleanup:
+	git_str_dispose(&contents);
+	if (error < 0)
+		git_ignore_source_free(source);
+	else
+		*out = source;
+	return error;
+}
+
+int git_ignore_source_path_is_ignored(
+	int *ignored, git_ignore_source *source, const char *path)
+{
+	GIT_ASSERT_ARG(source);
+	return ignore_path_is_ignored(ignored, source->repo, path, source->file);
+}
+
+void git_ignore_source_free(git_ignore_source *source)
+{
+	if (!source)
+		return;
+	git_attr_file__free(source->file);
+	git__free(source);
 }
 
 int git_ignore__check_pathspec_for_exact_ignores(

@@ -1,6 +1,9 @@
 Unreleased
 ----------
 
+* Add operation-local global ignore sources that parse captured bytes with
+  their original pathname and retain native ignore precedence.
+
 * Add `GIT_MERGE_SKIP_ATTRIBUTES` to select the built-in merge driver without
   reading attribute files, loading macros, or consulting registered drivers.
   The option applies to recursive merge-base construction too; checkout and

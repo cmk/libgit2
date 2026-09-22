@@ -82,6 +82,57 @@ GIT_EXTERN(int) git_ignore_path_is_ignored(
 	git_repository *repo,
 	const char *path);
 
+/** A parsed, operation-local replacement for core.excludesFile. */
+typedef struct git_ignore_source git_ignore_source;
+
+/**
+ * Parse captured global ignore bytes with their original source pathname.
+ *
+ * The pathname is used only for native pattern context, never opened.
+ * Relative paths are relative to the repository workdir; absolute paths
+ * retain the same workdir-prefix treatment as ordinary ignore loading.
+ * Bytes are copied and parsed with the repository's current core.ignoreCase.
+ * An empty buffer explicitly disables global rules, without default lookup.
+ * Local .gitignore files, info/exclude and internal rules are unaffected.
+ *
+ * The repository must outlive the result. Its workdir and ignore-related
+ * configuration must remain unchanged while the result is used. The result
+ * must not be used concurrently with other operations on that repository.
+ *
+ * @param out Parsed source; free with git_ignore_source_free.
+ * @param repo Repository supplying native parser settings and path context.
+ * @param source_path Original global source pathname.
+ * @param data Captured bytes (may be NULL only when len is zero).
+ * @param len Number of bytes, at most the native attribute-file size limit.
+ * @return 0 on success, or an error code.
+ */
+GIT_EXTERN(int) git_ignore_source_new(
+	git_ignore_source **out,
+	git_repository *repo,
+	const char *source_path,
+	const void *data,
+	size_t len);
+
+/**
+ * Check a path using a captured global source at normal global precedence.
+ *
+ * Only core.excludesFile is replaced; the existing native lookup handles
+ * parent directories, negation and all other ignore sources. Neither the
+ * original global pathname nor its ambient replacement is read.
+ *
+ * @param ignored Whether the path is ignored.
+ * @param source Parsed source and its borrowed repository.
+ * @param path Path relative to that repository's workdir.
+ * @return 0 on success, or an error code.
+ */
+GIT_EXTERN(int) git_ignore_source_path_is_ignored(
+	int *ignored,
+	git_ignore_source *source,
+	const char *path);
+
+/** Free a parsed source. NULL is allowed. */
+GIT_EXTERN(void) git_ignore_source_free(git_ignore_source *source);
+
 /** @} */
 GIT_END_DECL
 
