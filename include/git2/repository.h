@@ -567,6 +567,21 @@ GIT_EXTERN(const char *) git_repository_path(const git_repository *repo);
 GIT_EXTERN(const char *) git_repository_workdir(const git_repository *repo);
 
 /**
+ * Apply the workdir iterator's filename precomposition to a relative path.
+ *
+ * Uses the repository's core.precomposeUnicode setting and native encoding
+ * conversion. Disabled conversion or undecodable bytes preserve the input.
+ * This does not canonicalize, validate, case-fold or access the path.
+ *
+ * @param out Buffer receiving the converted path; dispose with git_buf_dispose.
+ * @param repo Repository supplying the iterator's configuration.
+ * @param path NUL-terminated workdir-relative path.
+ * @return 0 on success, or an error code.
+ */
+GIT_EXTERN(int) git_repository_precompose_workdir_path(
+	git_buf *out, git_repository *repo, const char *path);
+
+/**
  * Get the path of the shared common directory for this repository.
  *
  * If the repository is bare, it is the root directory for the repository.

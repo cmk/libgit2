@@ -3183,6 +3183,49 @@ static const char *resolved_parent_path(const git_repository *repo, git_reposito
 	return parent;
 }
 
+static int repository_precompose_workdir_path(
+	git_str *out, git_repository *repo, const char *path)
+{
+	int error = 0;
+#ifdef GIT_USE_ICONV
+	git_fs_path_iconv_t converter = GIT_PATH_ICONV_INIT;
+	const char *cursor = path, *part, *slash;
+	size_t len;
+	int precompose = 0;
+
+	/* Keep the iterator's lenient configuration lookup and native converter. */
+	if (git_repository__configmap_lookup(&precompose, repo, GIT_CONFIGMAP_PRECOMPOSE) < 0)
+		git_error_clear();
+	if (precompose)
+		git_fs_path_iconv_init_precompose(&converter);
+	/* Directory iteration converts each name independently. An undecodable
+	 * component must not suppress conversion of its valid ancestors. */
+	while (!error) {
+		part = cursor;
+		slash = strchr(cursor, '/');
+		len = slash ? (size_t)(slash - cursor) : strlen(cursor);
+		if ((error = git_fs_path_iconv(&converter, &part, &len)) < 0 ||
+		    (error = git_str_put(out, part, len)) < 0 || !slash)
+			break;
+		error = git_str_putc(out, '/');
+		cursor = slash + 1;
+	}
+	git_fs_path_iconv_clear(&converter);
+#else
+	GIT_UNUSED(repo);
+	error = git_str_sets(out, path);
+#endif
+	return error;
+}
+
+int git_repository_precompose_workdir_path(
+	git_buf *out, git_repository *repo, const char *path)
+{
+	GIT_ASSERT_ARG(repo);
+	GIT_ASSERT_ARG(path);
+	GIT_BUF_WRAP_PRIVATE(out, repository_precompose_workdir_path, repo, path);
+}
+
 int git_repository_item_path(
 	git_buf *out,
 	const git_repository *repo,
