@@ -739,7 +739,8 @@ static int find_repo_traverse(
 	struct repo_paths *out,
 	const char *start_path,
 	const char *ceiling_dirs,
-	uint32_t flags)
+	uint32_t flags,
+	bool preserve_gitdir)
 {
 	git_str path = GIT_STR_INIT;
 	git_str repo_link = GIT_STR_INIT;
@@ -753,7 +754,11 @@ static int find_repo_traverse(
 
 	git_str_clear(&out->gitdir);
 
-	if ((error = git_fs_path_prettify(&path, start_path, NULL)) < 0)
+	if (preserve_gitdir) {
+		if ((error = git_str_puts(&path, start_path)) < 0)
+			return error;
+		git_fs_path_mkposix(path.ptr);
+	} else if ((error = git_fs_path_prettify(&path, start_path, NULL)) < 0)
 		return error;
 
 	/*
@@ -809,7 +814,7 @@ static int find_repo_traverse(
 
 					break;
 				}
-			} else if (S_ISREG(st.st_mode) && git__suffixcmp(path.ptr, "/" DOT_GIT) == 0) {
+			} else if (!preserve_gitdir && S_ISREG(st.st_mode) && git__suffixcmp(path.ptr, "/" DOT_GIT) == 0) {
 				if ((error = read_gitfile(&repo_link, path.ptr)) < 0 ||
 				    (error = is_valid_repository_path(&is_valid, &repo_link, &common_link, flags)) < 0)
 					goto out;
@@ -971,7 +976,7 @@ static int find_repo(
 		}
 	}
 
-	error = find_repo_traverse(out, start_path, ceiling_dirs, flags);
+	error = find_repo_traverse(out, start_path, ceiling_dirs, flags, false);
 
 done:
 	git_str_dispose(&gitdir_buf);
@@ -1104,11 +1109,12 @@ static int repo_is_worktree(unsigned *out, const git_repository *repo)
 	return error;
 }
 
-int git_repository_open_ext(
+static int repository_open(
 	git_repository **repo_ptr,
 	const char *start_path,
 	unsigned int flags,
-	const char *ceiling_dirs)
+	const char *ceiling_dirs,
+	bool preserve_gitdir)
 {
 	struct repo_paths paths = { GIT_STR_INIT };
 	git_repository *repo = NULL;
@@ -1119,7 +1125,9 @@ int git_repository_open_ext(
 	if (repo_ptr)
 		*repo_ptr = NULL;
 
-	error = find_repo(&paths, start_path, ceiling_dirs, flags);
+	error = preserve_gitdir
+		? find_repo_traverse(&paths, start_path, NULL, flags, true)
+		: find_repo(&paths, start_path, ceiling_dirs, flags);
 
 	if (error < 0 || !repo_ptr)
 		goto cleanup;
@@ -1185,10 +1193,36 @@ cleanup:
 	return error;
 }
 
+int git_repository_open_ext(
+	git_repository **out,
+	const char *path,
+	unsigned int flags,
+	const char *ceiling_dirs)
+{
+	return repository_open(out, path, flags, ceiling_dirs, false);
+}
+
 int git_repository_open(git_repository **repo_out, const char *path)
 {
 	return git_repository_open_ext(
 		repo_out, path, GIT_REPOSITORY_OPEN_NO_SEARCH, NULL);
+}
+
+int git_repository_open_gitdir_preserving_path(
+	git_repository **out,
+	const char *git_dir)
+{
+	GIT_ASSERT_ARG(out);
+	GIT_ASSERT_ARG(git_dir);
+	*out = NULL;
+
+	if (git_fs_path_root(git_dir) < 0) {
+		git_error_set(GIT_ERROR_INVALID, "Git directory must be absolute");
+		return -1;
+	}
+
+	return repository_open(out, git_dir,
+		GIT_REPOSITORY_OPEN_NO_SEARCH | GIT_REPOSITORY_OPEN_NO_DOTGIT, NULL, true);
 }
 
 int git_repository_open_from_worktree(git_repository **repo_out, git_worktree *wt)

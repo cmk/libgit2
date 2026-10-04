@@ -185,6 +185,25 @@ GIT_EXTERN(int) git_repository_open_ext(
 	const char *ceiling_dirs);
 
 /**
+ * Open an absolute Git directory without resolving its pathname spelling.
+ *
+ * Unlike the ordinary open functions, this preserves symlink components in
+ * the repository path used for conditional configuration. It neither searches
+ * parents nor appends ".git" nor follows a worktree gitfile. The path must
+ * already name a Git directory; relative paths and files are rejected.
+ *
+ * Normal repository validation, configuration and workdir setup still apply.
+ * This does not pin filesystem identities or prevent concurrent path changes.
+ *
+ * @param[out] out Repository to open
+ * @param git_dir Absolute path to the selected Git directory
+ * @return 0 on success, or an error code
+ */
+GIT_EXTERN(int) git_repository_open_gitdir_preserving_path(
+	git_repository **out,
+	const char *git_dir);
+
+/**
  * Open a bare repository on the serverside.
  *
  * This is a fast open for bare repositories that will come in handy

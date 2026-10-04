@@ -5,6 +5,7 @@
 
 static int validate_ownership = 0;
 static git_buf config_path = GIT_BUF_INIT;
+static void make_gitlink_dir(const char *dir, const char *linktext);
 
 void test_repo_open__initialize(void)
 {
@@ -84,6 +85,79 @@ void test_repo_open__standard_empty_repo_through_workdir(void)
 
 	cl_assert(git_repository_workdir(repo) != NULL);
 	cl_assert(git__suffixcmp(git_repository_workdir(repo), "/") == 0);
+}
+
+void test_repo_open__preserved_gitdir_rejects_discovery_and_gitfiles(void)
+{
+	git_repository *repo = cl_git_sandbox_init("empty_standard_repo"), *opened = NULL;
+	git_str path = GIT_STR_INIT, gitfile = GIT_STR_INIT;
+
+	cl_git_pass(git_str_puts(&path, git_repository_path(repo)));
+	cl_git_pass(git_repository_open_gitdir_preserving_path(&opened, path.ptr));
+	cl_assert_equal_s(path.ptr, git_repository_path(opened));
+	git_repository_free(opened);
+	opened = NULL;
+
+	cl_git_fail(git_repository_open_gitdir_preserving_path(&opened, "empty_standard_repo/.git"));
+	cl_assert_equal_p(NULL, opened);
+	cl_git_fail(git_repository_open_gitdir_preserving_path(&opened, git_repository_workdir(repo)));
+	cl_assert_equal_p(NULL, opened);
+
+	make_gitlink_dir("alternate", "gitdir: ../empty_standard_repo/.git");
+	cl_git_pass(git_fs_path_prettify(&gitfile, "alternate/.git", NULL));
+	cl_git_fail(git_repository_open_gitdir_preserving_path(&opened, gitfile.ptr));
+	cl_assert_equal_p(NULL, opened);
+	git_str_dispose(&gitfile);
+	git_str_dispose(&path);
+}
+
+void test_repo_open__preserved_gitdir_keeps_conditional_context(void)
+{
+#ifndef GIT_WIN32
+	git_repository *repo = cl_git_sandbox_init("empty_standard_repo");
+	git_repository *opened = NULL, *ordinary = NULL;
+	git_config *config;
+	git_str spelling = GIT_STR_INIT, canonical = GIT_STR_INIT, content = GIT_STR_INIT;
+	int value;
+
+	cl_git_pass(git_str_puts(&spelling, git_repository_path(repo)));
+	git_str_rtrim(&spelling);
+	if (spelling.ptr[spelling.size - 1] == '/')
+		git_str_truncate(&spelling, spelling.size - 1);
+	cl_must_pass(p_rename("empty_standard_repo/.git", "empty_standard_repo/admin.git"));
+	cl_must_pass(symlink("admin.git", "empty_standard_repo/.git"));
+	cl_git_pass(git_fs_path_prettify(&canonical, "empty_standard_repo/admin.git", NULL));
+	cl_git_pass(git_str_printf(&content,
+		"[core]\n bare=false\n"
+		"[includeIf \"gitdir:%s\"]\n path=alias-config\n"
+		"[includeIf \"gitdir:%s\"]\n path=canonical-config\n",
+		spelling.ptr, canonical.ptr));
+	cl_git_rewritefile("empty_standard_repo/admin.git/config", content.ptr);
+	cl_git_rewritefile("empty_standard_repo/admin.git/alias-config", "[marker]\n alias=true\n");
+	cl_git_rewritefile("empty_standard_repo/admin.git/canonical-config", "[marker]\n canonical=true\n");
+
+	cl_git_pass(git_repository_open_gitdir_preserving_path(&opened, spelling.ptr));
+	cl_git_pass(git_repository_config(&config, opened));
+	cl_git_pass(git_config_get_bool(&value, config, "marker.alias"));
+	cl_assert_equal_i(1, value);
+	cl_git_fail_with(GIT_ENOTFOUND, git_config_get_bool(&value, config, "marker.canonical"));
+	git_config_free(config);
+	git_repository_free(opened);
+
+	/* The ordinary direct-directory API keeps its canonicalizing behavior. */
+	cl_git_pass(git_repository_open(&ordinary, spelling.ptr));
+	cl_git_pass(git_repository_config(&config, ordinary));
+	cl_git_pass(git_config_get_bool(&value, config, "marker.canonical"));
+	cl_assert_equal_i(1, value);
+	cl_git_fail_with(GIT_ENOTFOUND, git_config_get_bool(&value, config, "marker.alias"));
+	git_config_free(config);
+	git_repository_free(ordinary);
+	cl_must_pass(p_unlink("empty_standard_repo/.git"));
+	cl_must_pass(p_rename("empty_standard_repo/admin.git", "empty_standard_repo/.git"));
+	git_str_dispose(&content);
+	git_str_dispose(&canonical);
+	git_str_dispose(&spelling);
+#endif
 }
 
 
