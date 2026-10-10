@@ -1,6 +1,9 @@
 Unreleased
 ----------
 
+* Add exclusive attribute-read sessions with an explicit required or absent
+  system source, retained macro interpretation and caller-supplied path kind.
+
 * Add operation-local global ignore sources that parse captured bytes with
   their original pathname and retain native ignore precedence.
 

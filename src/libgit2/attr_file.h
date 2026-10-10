@@ -44,8 +44,9 @@ typedef enum {
 	GIT_ATTR_FILE_SOURCE_INDEX  = 2,
 	GIT_ATTR_FILE_SOURCE_HEAD   = 3,
 	GIT_ATTR_FILE_SOURCE_COMMIT = 4,
+	GIT_ATTR_FILE_SOURCE_SYSTEM = 5,
 
-	GIT_ATTR_FILE_NUM_SOURCES   = 5
+	GIT_ATTR_FILE_NUM_SOURCES   = 6
 } git_attr_file_source_t;
 
 typedef struct {
@@ -133,7 +134,8 @@ typedef struct {
 typedef struct {
 	int key;
 	unsigned int init_setup:1,
-		init_sysdir:1;
+		init_sysdir:1,
+		require_system_file:1;
 	git_str sysdir;
 	git_str tmp;
 } git_attr_session;

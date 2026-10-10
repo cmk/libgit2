@@ -148,14 +148,17 @@ int git_attr_file__load(
 		git_str_put(&content, git_blob_rawcontent(blob), (size_t)blobsize);
 		break;
 	}
+	case GIT_ATTR_FILE_SOURCE_SYSTEM:
 	case GIT_ATTR_FILE_SOURCE_FILE: {
 		int fd = -1;
+		bool required = source->type == GIT_ATTR_FILE_SOURCE_SYSTEM;
 
-		/* For open or read errors, pretend that we got ENOTFOUND. */
+		/* Ordinary optional sources treat open/read errors as absence. */
 		/* TODO: issue warning when warning API is available */
 
 		if (p_stat(entry->fullpath, &st) < 0 ||
 			S_ISDIR(st.st_mode) ||
+			(required && (!S_ISREG(st.st_mode) || st.st_size < 0)) ||
 			(fd = git_futils_open_ro(entry->fullpath)) < 0 ||
 			(st.st_size > GIT_ATTR_MAX_FILE_SIZE) ||
 			(error = git_futils_readbuffer_fd(&content, fd, (size_t)st.st_size)) < 0)
@@ -163,6 +166,13 @@ int git_attr_file__load(
 
 		if (fd >= 0)
 			p_close(fd);
+
+		if (required && nonexistent) {
+			git_error_set(GIT_ERROR_INVALID,
+				"could not read required system attributes '%s'", entry->fullpath);
+			error = -1;
+			goto cleanup;
+		}
 
 		break;
 	}
@@ -244,7 +254,8 @@ int git_attr_file__load(
 		git_oid_cpy(&file->cache_data.oid, git_tree_id(tree));
 	else if (source->type == GIT_ATTR_FILE_SOURCE_COMMIT)
 		git_oid_cpy(&file->cache_data.oid, git_tree_id(tree));
-	else if (source->type == GIT_ATTR_FILE_SOURCE_FILE)
+	else if (source->type == GIT_ATTR_FILE_SOURCE_FILE ||
+	         source->type == GIT_ATTR_FILE_SOURCE_SYSTEM)
 		git_futils_filestamp_set_from_stat(&file->cache_data.stamp, &st);
 	/* else always cacheable */
 
@@ -281,6 +292,7 @@ int git_attr_file__out_of_date(
 	case GIT_ATTR_FILE_SOURCE_MEMORY:
 		return 0;
 
+	case GIT_ATTR_FILE_SOURCE_SYSTEM:
 	case GIT_ATTR_FILE_SOURCE_FILE:
 		return git_futils_filestamp_check(
 			&file->cache_data.stamp, file->entry->fullpath);

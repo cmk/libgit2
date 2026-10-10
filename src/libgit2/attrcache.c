@@ -223,7 +223,9 @@ static int attr_cache_lookup(
 		filename = source->filename;
 	}
 
-	if (wd && !git__prefixcmp(filename, wd))
+	/* Explicit system sources remain unscoped, even inside the worktree. */
+	if (source->type != GIT_ATTR_FILE_SOURCE_SYSTEM &&
+	    wd && !git__prefixcmp(filename, wd))
 		filename += strlen(wd);
 
 	/* check cache for existing entry */
