@@ -12,6 +12,7 @@
 #include "config.h"
 #include "attr_file.h"
 #include "ignore.h"
+#include "index.h"
 #include "git2/oid.h"
 #include "hashmap_str.h"
 #include <ctype.h>
@@ -119,12 +120,13 @@ typedef struct {
 	git_attr_assignment *found;
 } attr_get_many_info;
 
-int git_attr_get_many_with_session(
+static int attr_get_many(
 	const char **values,
 	git_repository *repo,
 	git_attr_session *attr_session,
 	git_attr_options *opts,
 	const char *pathname,
+	git_dir_flag dir_flag,
 	size_t num_attr,
 	const char **names)
 {
@@ -136,7 +138,6 @@ int git_attr_get_many_with_session(
 	git_attr_rule *rule;
 	attr_get_many_info *info = NULL;
 	size_t num_found = 0;
-	git_dir_flag dir_flag = GIT_DIR_FLAG_UNKNOWN;
 
 	if (!num_attr)
 		return 0;
@@ -147,7 +148,7 @@ int git_attr_get_many_with_session(
 	GIT_ASSERT_ARG(names);
 	GIT_ERROR_CHECK_VERSION(opts, GIT_ATTR_OPTIONS_VERSION, "git_attr_options");
 
-	if (git_repository_is_bare(repo))
+	if (dir_flag == GIT_DIR_FLAG_UNKNOWN && git_repository_is_bare(repo))
 		dir_flag = GIT_DIR_FLAG_FALSE;
 
 	if (git_attr_path__init(&path, pathname, git_repository_workdir(repo), dir_flag) < 0)
@@ -157,7 +158,10 @@ int git_attr_get_many_with_session(
 		goto cleanup;
 
 	info = git__calloc(num_attr, sizeof(attr_get_many_info));
-	GIT_ERROR_CHECK_ALLOC(info);
+	if (!info) {
+		error = -1;
+		goto cleanup;
+	}
 
 	git_vector_foreach(&files, i, file) {
 
@@ -197,6 +201,19 @@ cleanup:
 	git__free(info);
 
 	return error;
+}
+
+int git_attr_get_many_with_session(
+	const char **values,
+	git_repository *repo,
+	git_attr_session *attr_session,
+	git_attr_options *opts,
+	const char *pathname,
+	size_t num_attr,
+	const char **names)
+{
+	return attr_get_many(values, repo, attr_session, opts, pathname,
+		GIT_DIR_FLAG_UNKNOWN, num_attr, names);
 }
 
 int git_attr_get_many(
@@ -375,6 +392,22 @@ static int system_attr_file(
 	return 0;
 }
 
+static git_attr_file_source system_attr_source(
+	git_attr_session *session, const char *filename)
+{
+	git_attr_file_source source = { GIT_ATTR_FILE_SOURCE_FILE, NULL, filename };
+	if (session && session->require_system_file)
+		source.type = GIT_ATTR_FILE_SOURCE_SYSTEM;
+	return source;
+}
+
+static int preload_system_attr_file(
+	git_repository *repo, git_attr_session *session, const char *filename)
+{
+	git_attr_file_source source = system_attr_source(session, filename);
+	return preload_attr_source(repo, session, &source);
+}
+
 static int attr_setup(
 	git_repository *repo,
 	git_attr_session *attr_session,
@@ -402,7 +435,7 @@ static int attr_setup(
 	 */
 
 	if ((error = system_attr_file(&system, attr_session)) < 0 ||
-	    (error = preload_attr_file(repo, attr_session, NULL, system.ptr)) < 0) {
+	    (error = preload_system_attr_file(repo, attr_session, system.ptr)) < 0) {
 		if (error != GIT_ENOTFOUND)
 			goto out;
 
@@ -459,6 +492,101 @@ out:
 	git_str_dispose(&info);
 
 	return error;
+}
+
+struct git_attr_read_session {
+	git_repository *repo;
+	git_attr_session session;
+	git_attr_options opts;
+};
+
+static bool attr_path_is_absolute(const char *path)
+{
+#ifdef GIT_WIN32
+	/* A drive or UNC prefix is required; a current-drive root is not absolute. */
+	return git_fs_path_root(path) > 0;
+#else
+	return git_fs_path_is_absolute(path);
+#endif
+}
+
+int git_attr_read_session_new(
+	git_attr_read_session **out,
+	git_repository *repo,
+	const char *system_file,
+	uint32_t flags)
+{
+	git_attr_read_session *reader;
+	int error;
+
+	GIT_ASSERT_ARG(out);
+	*out = NULL;
+	GIT_ASSERT_ARG(repo);
+
+	if ((flags & ~(3u | GIT_ATTR_CHECK_NO_SYSTEM)) || (flags & 3u) == 3u ||
+	    (system_file && !attr_path_is_absolute(system_file))) {
+		git_error_set(GIT_ERROR_INVALID, "invalid attribute session options");
+		return -1;
+	}
+	if (git_repository_attr_cache(repo)) {
+		git_error_set(GIT_ERROR_INVALID, "attribute session requires a fresh cache");
+		return -1;
+	}
+	/* Index handles can load filters through this repository without borrowing it. */
+	if (repo->_index && GIT_REFCOUNT_VAL(repo->_index) > 1) {
+		git_error_set(GIT_ERROR_INVALID, "attribute session requires no outstanding index handles");
+		return -1;
+	}
+
+	reader = git__calloc(1, sizeof(*reader));
+	GIT_ERROR_CHECK_ALLOC(reader);
+	reader->repo = repo;
+	reader->opts.version = GIT_ATTR_OPTIONS_VERSION;
+	reader->opts.flags = flags;
+	git_attr_session__init(&reader->session, repo);
+	/* Do not resolve the process-global system search path. */
+	reader->session.init_sysdir = 1;
+	reader->session.require_system_file = system_file != NULL;
+
+	if ((system_file &&
+	     (error = git_str_sets(&reader->session.sysdir, system_file)) < 0) ||
+	    (error = attr_setup(repo, &reader->session, &reader->opts)) < 0) {
+		git_attr_read_session_free(reader);
+		return error;
+	}
+
+	*out = reader;
+	return 0;
+}
+
+int git_attr_read_session_get(
+	const char **value,
+	git_attr_read_session *reader,
+	const char *path,
+	int is_dir,
+	const char *name)
+{
+	GIT_ASSERT_ARG(value);
+	*value = NULL;
+	GIT_ASSERT_ARG(reader);
+	GIT_ASSERT_ARG(path);
+	GIT_ASSERT_ARG(name);
+	if (attr_path_is_absolute(path) || git_fs_path_is_dirsep(path[0]) ||
+	    (is_dir != 0 && is_dir != 1)) {
+		git_error_set(GIT_ERROR_INVALID, "invalid attribute session query");
+		return -1;
+	}
+	return attr_get_many(value, reader->repo, &reader->session, &reader->opts,
+		path, is_dir ? GIT_DIR_FLAG_TRUE : GIT_DIR_FLAG_FALSE, 1, &name);
+}
+
+void git_attr_read_session_free(git_attr_read_session *reader)
+{
+	if (!reader)
+		return;
+	git_attr_cache_flush(reader->repo);
+	git_attr_session__free(&reader->session);
+	git__free(reader);
 }
 
 int git_attr_add_macro(
@@ -701,9 +829,10 @@ static int collect_attr_files(
 	if (!opts || (opts->flags & GIT_ATTR_CHECK_NO_SYSTEM) == 0) {
 		error = system_attr_file(&dir, attr_session);
 
-		if (!error)
-			error = push_attr_file(repo, attr_session, files, NULL, dir.ptr);
-		else if (error == GIT_ENOTFOUND)
+		if (!error) {
+			git_attr_file_source source = system_attr_source(attr_session, dir.ptr);
+			error = push_attr_source(repo, attr_session, files, &source, true);
+		} else if (error == GIT_ENOTFOUND)
 			error = 0;
 	}
 

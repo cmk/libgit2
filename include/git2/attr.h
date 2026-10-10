@@ -148,6 +148,65 @@ GIT_EXTERN(git_attr_value_t) git_attr_value(const char *attr);
 /** Honor `.gitattributes` in a specific commit */
 #define GIT_ATTR_CHECK_INCLUDE_COMMIT   (1 << 4)
 
+/** An exclusive attribute-read session over a fresh repository cache. */
+typedef struct git_attr_read_session git_attr_read_session;
+
+/**
+ * Create an attribute-read session with an explicit system source.
+ *
+ * `system_file` is an absolute pathname copied by the session, or NULL to
+ * disable system discovery, including macro preloading. A supplied file must
+ * be readable and regular at construction. Its parsed contents are retained
+ * for the session; later removal does not invalidate them. The system source
+ * has a distinct cache identity even if the supplied file is also a worktree
+ * `.gitattributes`; system rules remain repository-wide. Other sources and
+ * their precedence retain native behavior. In particular, NO_SYSTEM suppresses
+ * system matching, not macro preloading from an explicitly supplied file.
+ *
+ * The repository must have no initialized attribute/ignore cache or outstanding
+ * index handles. An internal index cache with no external references is allowed.
+ * The caller must exclusively own it for this session's lifetime: no other attribute,
+ * ignore or repository-mutating operations may run. Free the session before
+ * the repository. Teardown clears the session's repository cache.
+ *
+ * @param out Receives the session; NULL on failure
+ * @param repo Fresh repository, borrowed until session destruction
+ * @param system_file Required absolute file, or NULL for no system source
+ * @param flags FILE_THEN_INDEX, INDEX_THEN_FILE or INDEX_ONLY, optionally
+ *              combined with NO_SYSTEM; fixed for the session
+ * @return 0 on success, negative error otherwise
+ */
+GIT_EXTERN(int) git_attr_read_session_new(
+	git_attr_read_session **out,
+	git_repository *repo,
+	const char *system_file,
+	uint32_t flags);
+
+/**
+ * Query an attribute using an already observed directory classification.
+ *
+ * No stat of the operand determines its kind. Attribute sources may still be
+ * opened under the repository's native source order. The returned value is
+ * session-owned; use git_attr_value to classify it and copy strings before
+ * destroying the session. Paths must be repository-relative.
+ *
+ * @param value Receives the native attribute value; NULL on failure
+ * @param session Session returned by git_attr_read_session_new
+ * @param path Repository-relative operand
+ * @param is_dir 1 for a directory, 0 otherwise
+ * @param name Attribute to query
+ * @return 0 on success, negative error otherwise
+ */
+GIT_EXTERN(int) git_attr_read_session_get(
+	const char **value,
+	git_attr_read_session *session,
+	const char *path,
+	int is_dir,
+	const char *name);
+
+/** Release a session and its repository cache. NULL is accepted. */
+GIT_EXTERN(void) git_attr_read_session_free(git_attr_read_session *session);
+
 /**
 * An options structure for querying attributes.
 */
@@ -380,4 +439,3 @@ GIT_EXTERN(int) git_attr_add_macro(
 /** @} */
 GIT_END_DECL
 #endif
-
