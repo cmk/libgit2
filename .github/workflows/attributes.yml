@@ -1,0 +1,73 @@
+name: Native Attribute Tests
+run-name: Native attribute tests at ${{ inputs.revision }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Full 40-character lowercase commit SHA to test
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-attributes-${{ inputs.revision }}
+  cancel-in-progress: false
+
+jobs:
+  attributes:
+    name: Attributes and filters (${{ matrix.os }})
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            generator: Unix Makefiles
+            test-binary: build/libgit2_tests
+          - os: windows-2022
+            generator: Visual Studio 17 2022
+            test-binary: build/Debug/libgit2_tests.exe
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOURCE_REVISION: ${{ inputs.revision }}
+      CMAKE_GENERATOR: ${{ matrix.generator }}
+      TEST_BINARY: ${{ matrix.test-binary }}
+    steps:
+      - name: Validate exact source revision
+        run: '[[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]'
+      - name: Check out exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.revision }}
+          path: source
+          persist-credentials: false
+      - name: Verify tested source
+        run: |
+          test "$(git -C source rev-parse HEAD)" = "$SOURCE_REVISION"
+          test -f source/tests/libgit2/attr/session.c
+          printf 'Native source: %s\n' "$SOURCE_REVISION" >> "$GITHUB_STEP_SUMMARY"
+      - name: Configure minimal native build
+        run: |
+          architecture=()
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            architecture=(-A x64)
+          fi
+          cmake -S source -B build "${architecture[@]}" \
+            -DCMAKE_BUILD_TYPE=Debug -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_TESTS=ON -DBUILD_CLI=OFF -DBUILD_EXAMPLES=OFF \
+            -DUSE_HTTPS=OFF -DUSE_SSH=OFF -DUSE_GSSAPI=OFF \
+            -DUSE_BUNDLED_ZLIB=ON -DREGEX_BACKEND=builtin \
+            -DUSE_SHA1=CollisionDetection -DUSE_SHA256=builtin
+      - name: Build native test executable
+        run: cmake --build build --config Debug --target libgit2_tests --parallel 4
+      - name: Require isolated attribute session tests
+        run: '"$TEST_BINARY" -sattr::session -v'
+      - name: Run attribute and filter suites
+        run: '"$TEST_BINARY" -sattr -sfilter -v'
